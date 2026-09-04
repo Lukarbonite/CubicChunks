@@ -1,0 +1,27 @@
+pluginManagement {
+    repositories {
+        maven { name = 'Fabric';       url = 'https://maven.fabricmc.net/' }
+        maven { name = 'Architectury'; url = 'https://maven.architectury.dev/' }
+        maven { name = 'Forge';        url = 'https://maven.minecraftforge.net/' }
+        maven { name = 'NeoForge';     url = 'https://maven.neoforged.net/releases' }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'cubicchunks'
+
+// ─── Shared source containers (no build output, Java source only) ────────────
+include ':common'   // Platform-agnostic logic, API bridge, mixins, platform SPI
+include ':fabric'   // Fabric entry points, events, compat, platform impl
+
+// ─── MC 26.2 — Fabric, unobfuscated (no mappings needed), Java 25 ────────────
+include ':mc26_2-fabric'
+project(':mc26_2-fabric').projectDir = file('26.2/fabric')
+
+// ─── Legacy 1.12.2 Forge ─────────────────────────────────────────────────────
+// The 1.12.2 Forge port lives in 1.12.2/forge as a SELF-CONTAINED ForgeGradle 6
+// build (Gradle 8.2 wrapper, Java 8, Mixin 0.7, CubicGradle buildSrc). It cannot
+// share this Gradle 9.5 / Loom invocation, so it is intentionally NOT included
+// here. Build it on its own wrapper:
+//     cd 1.12.2/forge && ./gradlew build

@@ -1,0 +1,31 @@
+{
+	"schemaVersion": 1,
+	"id": "cubicchunks",
+	"version": "${version}",
+	"name": "CubicChunks",
+	"description": "Cubic Chunks — arbitrary world height and depth via cubic chunk storage.",
+	"authors": [
+		"OpenCubicChunks",
+		"lukarbonite"
+	],
+	"contact": {
+		"homepage": "https://github.com/OpenCubicChunks/CubicChunks",
+		"sources": "https://github.com/OpenCubicChunks/CubicChunks"
+	},
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"io.github.opencubicchunks.cubicchunks.CubicChunksFabric"
+		]
+	},
+	"mixins": [
+		"cubicchunks.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

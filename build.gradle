@@ -1,0 +1,22 @@
+// Root build — minimal shared conventions for the modern (Loom-based) modules.
+//
+// Source containers (:common, :fabric) have compileJava disabled; they exist
+// only so version builds can reference their src dirs via srcDirs +=.
+//
+// Version builds (e.g. :mc26_2-fabric) manage their own plugins, toolchain, and
+// Java release target — DO NOT set a global toolchain here. MC 26.2 requires
+// Java 25; future older modern versions may target Java 17/21.
+//
+// The legacy 1.12.2 Forge build (1.12.2/forge) is a standalone ForgeGradle 6
+// build and is not a subproject here.
+
+subprojects {
+    group = project.maven_group
+
+    repositories {
+        mavenCentral()
+        maven { name = 'Mojang';   url = 'https://libraries.minecraft.net/' }
+        maven { name = 'Fabric';   url = 'https://maven.fabricmc.net/' }
+        maven { name = 'NeoForge'; url = 'https://maven.neoforged.net/releases' }
+    }
+}

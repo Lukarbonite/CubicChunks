@@ -1,111 +1,31 @@
-# Build #
-#########
-MANIFEST.MF
-dependency-reduced-pom.xml
-.checkstyle
-build.py
+# Gradle
+.gradle/
+build/
+**/build/
+!src/**/build/
 
-# Compiled #
-############
-bin
-build
-dist
-lib
-out
-run
-run/**
-.mixin.out
-.mixin.out/**
-target
-*.com
-*.class
-*.dll
-*.exe
-*.o
-*.so
-classes/
+# Loom / Architectury
+.architectury-transformer/
+**/.architectury-transformer/
+run/
+**/run/
+remappedSrc/
 
-# Databases #
-#############
-*.db
-*.sql
-*.sqlite
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.settings/
+.classpath
+.project
+bin/
+out/
+.vscode/
 
-# Packages #
-############
-*.7z
-*.dmg
-*.gz
-*.iso
-*.rar
-*.tar
-*.zip
-
-# Repository #
-##############
-.git
-
-# Logging #
-###########
-/logs
-*.log
-
-# Misc #
-########
-*.bak
-*.hprof
-*~
-
-# Libraries #
-#############
-/libs
-
-# System #
-##########
+# OS
 .DS_Store
-ehthumbs.db
 Thumbs.db
 
-# Project #
-###########
-.classpath
-.externalToolBuilders
-.gradle
-.nb-gradle
-.project
-.settings
-eclipse
-nbproject
-atlassian-ide-plugin.xml
-build.xml
-nb-configuration.xml
-*.iml
-*.ipr
-*.iws
-
-# eclipse
-bin
-*.launch
-.settings
-.metadata
-.classpath
-.project
-
-# idea
-out
-*.ipr
-*.iws
-*.iml
-.idea/*
-!.idea/codeStyles/
-
-# gradle
-build
-.gradle
-
-# other
-eclipse
-run
-
-.nb-gradle-properties
-VERSION
+# Note: the legacy 1.12.2 Forge build keeps its own .gitignore at
+# 1.12.2/forge/.gitignore

@@ -1,0 +1,28 @@
+plugins {
+    id 'java-library'
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+base {
+    archivesName = "${project.archives_base_name}-common"
+}
+
+// common is a source-only container; platforms compile it via srcDirs +=.
+compileJava.enabled = false
+jar.enabled = false
+tasks.matching { it.name == 'remapJar' }.configureEach { enabled = false }
+
+loom {
+    noIntermediateMappings()
+}
+
+// Loom is applied here ONLY to give IDEs a Minecraft classpath for code insight
+// in common/src (which has no compile task of its own). Pinned to 26.2
+// (unobfuscated, so symbol names match runtime directly); actual compilation
+// always happens in the version projects via srcDirs +=, against each version's
+// own Minecraft + mappings.
+dependencies {
+    minecraft 'com.mojang:minecraft:26.2'
+    implementation "net.fabricmc:fabric-loader:${loader_version}"
+    implementation 'net.fabricmc.fabric-api:fabric-api:0.158.0+26.2'
+}

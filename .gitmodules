@@ -1,6 +1,6 @@
 [submodule "buildSrc"]
-	path = buildSrc
+	path = 1.12.2/forge/buildSrc
 	url = https://github.com/OpenCubicChunks/CubicGradle
 [submodule "CubicChunksAPI/buildSrc"]
-	path = CubicChunksAPI/buildSrc
+	path = 1.12.2/forge/CubicChunksAPI/buildSrc
 	url = https://github.com/OpenCubicChunks/CubicGradle
