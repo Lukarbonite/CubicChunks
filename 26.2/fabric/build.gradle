@@ -16,9 +16,29 @@ repositories {
 
 loom {
     noIntermediateMappings()
-    // No mixins yet. Loom 1.17 disables the mixin AP by default; when the first
-    // real mixin is added, configure the modern mixin setup here (or set
-    // useLegacyMixinAp = true with a defaultRefmapName if the legacy AP is needed).
+
+    // Pass -Ppopulation to a run task to enable cubic population in-game
+    // (adds -Dcubicchunks.population=true to the game JVM). Off otherwise.
+    //
+    // A hard heap cap is always applied so a memory blow-up surfaces as a logged
+    // OutOfMemoryError (with a heap dump) instead of exhausting system RAM and
+    // taking the machine down. Raise it only if you know the run needs more.
+    runs {
+        client {
+            vmArg '-Xmx4G'
+            vmArg '-XX:+HeapDumpOnOutOfMemoryError'
+            if (project.hasProperty('population')) {
+                property 'cubicchunks.population', 'true'
+            }
+        }
+        server {
+            vmArg '-Xmx4G'
+            vmArg '-XX:+HeapDumpOnOutOfMemoryError'
+            if (project.hasProperty('population')) {
+                property 'cubicchunks.population', 'true'
+            }
+        }
+    }
 }
 
 sourceSets {

@@ -37,7 +37,9 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.PalettedContainer;
+import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.world.level.chunk.Strategy;
 
 import java.util.Collection;
@@ -75,6 +77,13 @@ public class Cube implements ICube {
     private PalettedContainer<BlockState> blocks;
     private int nonAirBlockCount;
 
+    /**
+     * The vanilla section wrapping {@link #blocks}, created lazily once a {@link PalettedContainerFactory}
+     * (a world/registry) is available. While {@code null}, the cube is a world-free block store; once
+     * set, block get/set routes through it so its counts stay valid for lighting/rendering.
+     */
+    @Nullable private LevelChunkSection section;
+
     private final EntityContainer entities = new EntityContainer();
     private final Map<BlockPos, BlockEntity> blockEntities = new HashMap<>();
 
@@ -106,7 +115,7 @@ public class Cube implements ICube {
 
     @Override
     public boolean isEmpty() {
-        return nonAirBlockCount == 0;
+        return section != null ? section.hasOnlyAir() : nonAirBlockCount == 0;
     }
 
     @Override
@@ -122,7 +131,7 @@ public class Cube implements ICube {
      * @param localZ cube-local z (0..15)
      */
     public BlockState getBlockState(int localX, int localY, int localZ) {
-        return blocks.get(localX, localY, localZ);
+        return section != null ? section.getBlockState(localX, localY, localZ) : blocks.get(localX, localY, localZ);
     }
 
     @Nullable
@@ -142,6 +151,12 @@ public class Cube implements ICube {
      */
     @Nullable
     public BlockState setBlockState(int localX, int localY, int localZ, BlockState newstate) {
+        if (section != null) {
+            // Route through the section so its non-air/tickable counts stay valid. The section wraps
+            // the same block container as this cube, so blocks stays consistent too.
+            BlockState old = section.setBlockState(localX, localY, localZ, newstate);
+            return old == newstate ? null : old;
+        }
         BlockState old = blocks.getAndSet(localX, localY, localZ, newstate);
         if (old == newstate) {
             return null;
@@ -155,11 +170,46 @@ public class Cube implements ICube {
     }
 
     /**
-     * The backing palette-compressed block storage. Block states only for now; biomes and light are
-     * added with world integration.
+     * The backing palette-compressed block storage. Once a {@link LevelChunkSection} exists this
+     * returns the section's own container (the same instance the cube was created with).
      */
     public PalettedContainer<BlockState> getBlockStates() {
-        return blocks;
+        return section != null ? section.getStates() : blocks;
+    }
+
+    /**
+     * Returns this cube's {@link LevelChunkSection}, creating it (wrapping the existing block storage,
+     * with an empty biome container from {@code factory}) on first use. A cube is a section for its
+     * {@code (x, z, y)}; a cubic {@code LevelChunk} exposes cubes' sections in place of the fixed
+     * vanilla section array.
+     *
+     * @param factory the palette-container factory (from the world's {@code RegistryAccess})
+     * @return the cube's section
+     */
+    public LevelChunkSection getOrCreateSection(PalettedContainerFactory factory) {
+        if (section == null) {
+            section = new LevelChunkSection(blocks, factory.createForBiomes());
+            section.recalcBlockCounts();
+        }
+        return section;
+    }
+
+    /** The cube's {@link LevelChunkSection} if it has been created, otherwise {@code null}. */
+    @Nullable
+    public LevelChunkSection getSection() {
+        return section;
+    }
+
+    /**
+     * Replaces this cube's block storage with {@code container} (e.g. a copy of a vanilla section's
+     * states when mirroring an existing chunk), dropping any existing section and recomputing counts.
+     *
+     * @param container the block-state container to adopt
+     */
+    public void setBlockStates(PalettedContainer<BlockState> container) {
+        this.section = null;
+        this.blocks = container;
+        recountNonAirBlocks();
     }
 
     @Override
@@ -232,6 +282,9 @@ public class Cube implements ICube {
      * @param tag the compound to read from
      */
     public void readFromNbt(CompoundTag tag) {
+        // Replacing the block container invalidates any section wrapping the old one; drop it so the
+        // next getOrCreateSection wraps the freshly decoded container.
+        this.section = null;
         Tag blockStatesTag = tag.get(NBT_BLOCK_STATES);
         if (blockStatesTag == null) {
             this.blocks = new PalettedContainer<>(AIR, BLOCK_STRATEGY);

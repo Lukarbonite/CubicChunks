@@ -4,6 +4,7 @@ import io.github.opencubicchunks.cubicchunks.api.world.IMinMaxHeight;
 import io.github.opencubicchunks.cubicchunks.network.CubicNetwork;
 import io.github.opencubicchunks.cubicchunks.network.PacketCubicWorldData;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.server.level.ServerPlayer;
@@ -33,7 +34,21 @@ public class CubicChunksFabric implements ModInitializer {
             CubicChunksCommon.verifyColumnSerialization();
             CubicChunksCommon.verifyCubeStorageDisk();
             CubicChunksCommon.verifyCubeProviderStorage();
+            CubicChunksCommon.verifyBlockBridging(server);
+            CubicChunksCommon.verifyHeightExtension(server);
+            CubicChunksCommon.verifySectionStorage(server);
+            CubicChunksCommon.verifyLiveSectionAccess(server);
+            CubicChunksCommon.verifyPopulation(server);
+            CubicChunksCommon.verifyPersistence();
+            CubicChunksCommon.verifyExtendedHeight(server);
         });
+
+        // When population is enabled (-Dcubicchunks.population=true), put each chunk into cubic mode as
+        // it loads (restoring saved cube edits, else mirroring vanilla), and persist it on unload so
+        // edits survive. Storages are closed when the server stops.
+        ServerChunkEvents.CHUNK_LOAD.register(CubicChunksCommon::onChunkLoadPopulate);
+        ServerChunkEvents.CHUNK_UNLOAD.register(CubicChunksCommon::onChunkUnloadPersist);
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> CubicChunksCommon.closeStorages());
 
         // On join, tell the client the world's cubic build-height range (S2C round-trip test).
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {

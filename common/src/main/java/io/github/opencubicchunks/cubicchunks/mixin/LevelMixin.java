@@ -24,6 +24,7 @@
  */
 package io.github.opencubicchunks.cubicchunks.mixin;
 
+import io.github.opencubicchunks.cubicchunks.CubicChunksCommon;
 import io.github.opencubicchunks.cubicchunks.api.world.IMinMaxHeight;
 import io.github.opencubicchunks.cubicchunks.world.ICubicWorldHeightData;
 import net.minecraft.world.level.Level;
@@ -47,6 +48,25 @@ public abstract class LevelMixin implements IMinMaxHeight, ICubicWorldHeightData
     @Unique private boolean cubicchunks$hasCustomHeight = false;
     @Unique private int cubicchunks$minHeight;
     @Unique private int cubicchunks$maxHeight;
+
+    /**
+     * Overrides vanilla's {@code LevelReader.getMinY()} default (which returns
+     * {@code dimensionType().minY()}). While cubic population is enabled the whole level reports the
+     * extended window from creation, so build-height checks, section counts and heightmaps span the
+     * larger range; otherwise it is byte-for-byte the vanilla value.
+     */
+    public int getMinY() {
+        return CubicChunksCommon.populationEnabled
+                ? CubicChunksCommon.EXTENDED_MIN_Y
+                : ((Level) (Object) this).dimensionType().minY();
+    }
+
+    /** Extended world height when population is enabled; otherwise the vanilla {@code dimensionType().height()}. */
+    public int getHeight() {
+        return CubicChunksCommon.populationEnabled
+                ? CubicChunksCommon.EXTENDED_HEIGHT
+                : ((Level) (Object) this).dimensionType().height();
+    }
 
     @Override
     public int getMinHeight() {
