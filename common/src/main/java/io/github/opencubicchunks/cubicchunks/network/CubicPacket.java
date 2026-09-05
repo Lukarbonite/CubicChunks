@@ -20,7 +20,7 @@ public interface CubicPacket {
 
     /**
      * Handles this packet on the receiving side. For S2C packets this runs on the client's main
-     * thread (the loader layer schedules it there).
+     * thread (the loader layer schedules it there), with {@code ctx} providing the client level.
      */
-    void handle();
+    void handle(ClientPacketContext ctx);
 }

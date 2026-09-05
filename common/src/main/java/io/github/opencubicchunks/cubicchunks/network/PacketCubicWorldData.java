@@ -1,7 +1,9 @@
 package io.github.opencubicchunks.cubicchunks.network;
 
 import io.github.opencubicchunks.cubicchunks.CubicChunksCommon;
+import io.github.opencubicchunks.cubicchunks.world.ICubicWorldHeightData;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.world.level.Level;
 
 /**
  * Server-to-client packet announcing a world's cubic build-height range on join.
@@ -38,9 +40,17 @@ public class PacketCubicWorldData implements CubicPacket {
     }
 
     @Override
-    public void handle() {
-        CubicChunksCommon.LOGGER.info("Client received cubic world data: minHeight={}, maxHeight(exclusive)={}",
-                minHeight, maxHeight);
+    public void handle(ClientPacketContext ctx) {
+        Level level = ctx.level();
+        if (level instanceof ICubicWorldHeightData data) {
+            data.cubicchunks$setHeightData(minHeight, maxHeight);
+            CubicChunksCommon.LOGGER.info("Applied cubic world data to client level {}: minHeight={}, maxHeight(exclusive)={}",
+                    level.dimension().identifier(), minHeight, maxHeight);
+        } else {
+            CubicChunksCommon.LOGGER.warn("Received cubic world data but client level {} is not ICubicWorldHeightData "
+                            + "(LevelMixin did not apply)",
+                    level == null ? "<none>" : level.dimension().identifier());
+        }
     }
 
     public int minHeight() {

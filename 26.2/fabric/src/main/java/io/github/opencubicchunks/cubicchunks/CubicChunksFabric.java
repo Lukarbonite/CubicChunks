@@ -21,8 +21,12 @@ public class CubicChunksFabric implements ModInitializer {
     public void onInitialize() {
         CubicChunksCommon.init();
 
-        // Smoke-check the IMinMaxHeight height seam once the server's levels exist.
-        ServerLifecycleEvents.SERVER_STARTED.register(CubicChunksCommon::verifyHeightSeam);
+        // Smoke-check the IMinMaxHeight height seam and the core cube storage once the server exists.
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            CubicChunksCommon.verifyHeightSeam(server);
+            CubicChunksCommon.verifyCubeStorage();
+            CubicChunksCommon.verifyColumn();
+        });
 
         // On join, tell the client the world's cubic build-height range (S2C round-trip test).
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {

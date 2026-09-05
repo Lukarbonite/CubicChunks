@@ -25,47 +25,35 @@
 package io.github.opencubicchunks.cubicchunks.api.world;
 
 import io.github.opencubicchunks.cubicchunks.api.util.CubePos;
-import io.github.opencubicchunks.cubicchunks.api.util.XYZAddressable;
-import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 import javax.annotation.Nullable;
+import javax.annotation.ParametersAreNonnullByDefault;
 
-/**
- * A cube: a {@value #SIZE}x{@value #SIZE}x{@value #SIZE} section of the world.
- *
- * <p><b>Partial port.</b> On 1.12.2 this interface also exposed entity, tile-entity, lighting and
- * capability access (backed by Forge/vanilla types). So far the size constants, coordinate accessors
- * and the block-storage contract are ported; the rest will be added as the world subsystem lands.
- */
-public interface ICube extends XYZAddressable {
+@ParametersAreNonnullByDefault
+public interface ICubeProvider {
 
-    /** Side length of a cube. */
-    int SIZE = 16;
+    @Nullable
+    ICube getLoadedCube(int cubeX, int cubeY, int cubeZ);
 
-    /** Side length of a cube, as a double. */
-    double SIZE_D = 16.0D;
+    @Nullable
+    ICube getLoadedCube(CubePos coords);
 
-    /** The position of this cube in cube coordinates. */
-    CubePos getCoords();
+    ICube getCube(int cubeX, int cubeY, int cubeZ);
 
-    /** True if this cube contains only air. */
-    boolean isEmpty();
+    ICube getCube(CubePos coords);
 
     /**
-     * Returns the block state at the given world position (which must lie within this cube).
+     * Retrieve a column, if it exists and is loaded
      *
-     * @param pos world block position
-     * @return the block state
+     * @param x The x position of the column
+     * @param z The z position of the column
+     *
+     * @return The column, if loaded. Null, otherwise.
      */
-    BlockState getBlockState(BlockPos pos);
+    // TODO remove, use vanilla methods
+    @Nullable
+    LevelChunk getLoadedColumn(int x, int z); // more strictly define the return type
 
-    /**
-     * Sets the block state at the given world position (which must lie within this cube).
-     *
-     * @param pos world block position
-     * @param newstate the new block state
-     * @return the previous block state, or {@code null} if there was no change
-     */
-    @Nullable BlockState setBlockState(BlockPos pos, BlockState newstate);
+    LevelChunk provideColumn(int x, int z);   // more strictly define the return type
 }
