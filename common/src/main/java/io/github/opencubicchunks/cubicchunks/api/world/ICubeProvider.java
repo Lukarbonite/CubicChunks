@@ -25,7 +25,6 @@
 package io.github.opencubicchunks.cubicchunks.api.world;
 
 import io.github.opencubicchunks.cubicchunks.api.util.CubePos;
-import net.minecraft.world.level.chunk.LevelChunk;
 
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
@@ -51,9 +50,16 @@ public interface ICubeProvider {
      *
      * @return The column, if loaded. Null, otherwise.
      */
-    // TODO remove, use vanilla methods
     @Nullable
-    LevelChunk getLoadedColumn(int x, int z); // more strictly define the return type
+    IColumn getLoadedColumn(int x, int z);
 
-    LevelChunk provideColumn(int x, int z);   // more strictly define the return type
+    /**
+     * Retrieve a column, creating it if necessary.
+     *
+     * @param x The x position of the column
+     * @param z The z position of the column
+     *
+     * @return The column
+     */
+    IColumn provideColumn(int x, int z);
 }

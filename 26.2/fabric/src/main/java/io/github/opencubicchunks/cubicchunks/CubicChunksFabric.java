@@ -26,6 +26,13 @@ public class CubicChunksFabric implements ModInitializer {
             CubicChunksCommon.verifyHeightSeam(server);
             CubicChunksCommon.verifyCubeStorage();
             CubicChunksCommon.verifyColumn();
+            CubicChunksCommon.verifyCubeEntities(server);
+            CubicChunksCommon.verifyCubeProvider();
+            CubicChunksCommon.verifyCubicWorld(server);
+            CubicChunksCommon.verifyCubeSerialization();
+            CubicChunksCommon.verifyColumnSerialization();
+            CubicChunksCommon.verifyCubeStorageDisk();
+            CubicChunksCommon.verifyCubeProviderStorage();
         });
 
         // On join, tell the client the world's cubic build-height range (S2C round-trip test).

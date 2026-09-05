@@ -32,6 +32,8 @@ import io.github.opencubicchunks.cubicchunks.api.world.IHeightMap;
 import io.github.opencubicchunks.cubicchunks.world.ServerHeightMap;
 import io.github.opencubicchunks.cubicchunks.world.cube.Cube;
 import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 
 import javax.annotation.Nullable;
 import java.util.Collection;
@@ -143,5 +145,85 @@ public class Column implements IColumn {
     public boolean shouldTick() {
         // Ticket system not ported yet: tick while any cubes are loaded.
         return !cubeMap.isEmpty();
+    }
+
+    // ==========================================================================
+    // Serialization
+    // ==========================================================================
+
+    private static final String NBT_X = "x";
+    private static final String NBT_Z = "z";
+    private static final String NBT_OPACITY_INDEX = "opacity_index";
+    private static final String NBT_CUBES = "cubes";
+    private static final String NBT_CUBE_Y = "y";
+
+    /**
+     * Writes this column's coordinates, opacity index (height map) and every loaded cube into
+     * {@code tag}. Each cube is stored in the {@value #NBT_CUBES} list as its Y plus the block-state
+     * data from {@link Cube#writeToNbt}.
+     *
+     * <p><b>Note.</b> This bundles the cubes into the column tag, which is a convenient self-contained
+     * unit for now. The 1.12.2 region format stored columns and cubes in separate entries; the disk
+     * layer, when ported, may split them again (cubes keyed by {@link CubePos}). Biomes and entities
+     * are not written yet (deferred with the storage/world subsystem).
+     *
+     * @param tag the compound to write into
+     * @return {@code tag}, for chaining
+     */
+    public CompoundTag writeToNbt(CompoundTag tag) {
+        return writeToNbt(tag, true);
+    }
+
+    /**
+     * Writes this column into {@code tag}, optionally bundling its cubes.
+     *
+     * <p>With {@code includeCubes = true} the result is a self-contained column-plus-cubes unit. With
+     * {@code includeCubes = false} only column-level data (coordinates and opacity index) is written;
+     * this is what the disk layer uses, since {@code ICubicStorage} stores cubes in their own entries
+     * keyed by {@link CubePos}. {@link #readFromNbt} reads either form (a missing cube list restores no
+     * cubes).
+     *
+     * @param tag the compound to write into
+     * @param includeCubes whether to bundle the column's cubes into {@code tag}
+     * @return {@code tag}, for chaining
+     */
+    public CompoundTag writeToNbt(CompoundTag tag, boolean includeCubes) {
+        tag.putInt(NBT_X, x);
+        tag.putInt(NBT_Z, z);
+        tag.putByteArray(NBT_OPACITY_INDEX, ((ServerHeightMap) opacityIndex).getData());
+
+        if (includeCubes) {
+            ListTag cubesTag = new ListTag();
+            for (Cube cube : cubeMap) {
+                CompoundTag cubeTag = new CompoundTag();
+                cubeTag.putInt(NBT_CUBE_Y, cube.getY());
+                cube.writeToNbt(cubeTag);
+                cubesTag.add(cubesTag.size(), cubeTag);
+            }
+            tag.put(NBT_CUBES, cubesTag);
+        }
+        return tag;
+    }
+
+    /**
+     * Restores this column's opacity index and cubes from {@code tag} (written by
+     * {@link #writeToNbt}), replacing any currently loaded cubes. The column's own x/z are not changed;
+     * they are fixed at construction and the stored coordinates are for the disk layer's use.
+     *
+     * @param tag the compound to read from
+     */
+    public void readFromNbt(CompoundTag tag) {
+        tag.getByteArray(NBT_OPACITY_INDEX)
+                .ifPresent(data -> ((ServerHeightMap) opacityIndex).readData(data));
+
+        cubeMap.clear();
+        ListTag cubesTag = tag.getListOrEmpty(NBT_CUBES);
+        for (int i = 0; i < cubesTag.size(); i++) {
+            CompoundTag cubeTag = cubesTag.getCompoundOrEmpty(i);
+            int cubeY = cubeTag.getIntOr(NBT_CUBE_Y, 0);
+            Cube cube = new Cube(new CubePos(x, cubeY, z));
+            cube.readFromNbt(cubeTag);
+            cubeMap.put(cube);
+        }
     }
 }

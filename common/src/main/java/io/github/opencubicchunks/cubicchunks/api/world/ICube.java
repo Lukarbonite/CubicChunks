@@ -27,7 +27,12 @@ package io.github.opencubicchunks.cubicchunks.api.world;
 import io.github.opencubicchunks.cubicchunks.api.util.CubePos;
 import io.github.opencubicchunks.cubicchunks.api.util.XYZAddressable;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+
+import java.util.Collection;
+import java.util.Map;
 
 import javax.annotation.Nullable;
 
@@ -68,4 +73,55 @@ public interface ICube extends XYZAddressable {
      * @return the previous block state, or {@code null} if there was no change
      */
     @Nullable BlockState setBlockState(BlockPos pos, BlockState newstate);
+
+    /**
+     * Adds an entity to this cube's in-memory entity set.
+     *
+     * @param entity the entity to add
+     */
+    void addEntity(Entity entity);
+
+    /**
+     * Removes an entity from this cube's entity set.
+     *
+     * @param entity the entity to remove
+     * @return {@code true} if the entity was present and removed
+     */
+    boolean removeEntity(Entity entity);
+
+    /**
+     * Returns an unmodifiable view of the entities currently held by this cube.
+     *
+     * @return the entities in this cube
+     */
+    Collection<Entity> getEntities();
+
+    /**
+     * Returns the block entity at the given world position within this cube, or {@code null} if none.
+     *
+     * @param pos world block position
+     * @return the block entity, or {@code null}
+     */
+    @Nullable BlockEntity getBlockEntity(BlockPos pos);
+
+    /**
+     * Adds (or replaces) a block entity at its own position within this cube.
+     *
+     * @param blockEntity the block entity to store
+     */
+    void addBlockEntity(BlockEntity blockEntity);
+
+    /**
+     * Removes the block entity at the given world position within this cube, if present.
+     *
+     * @param pos world block position
+     */
+    void removeBlockEntity(BlockPos pos);
+
+    /**
+     * Returns an unmodifiable view of this cube's block entities, keyed by world position.
+     *
+     * @return the block entities in this cube
+     */
+    Map<BlockPos, BlockEntity> getBlockEntities();
 }

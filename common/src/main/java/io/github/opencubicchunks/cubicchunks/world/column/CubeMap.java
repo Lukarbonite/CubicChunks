@@ -152,6 +152,13 @@ public class CubeMap implements Iterable<Cube> {
     }
 
     /**
+     * Removes all cubes from this storage.
+     */
+    public void clear() {
+        cubes.clear();
+    }
+
+    /**
      * Binary search for the index of the specified cube. If the cube is not present, returns the index at which it
      * should be inserted.
      *

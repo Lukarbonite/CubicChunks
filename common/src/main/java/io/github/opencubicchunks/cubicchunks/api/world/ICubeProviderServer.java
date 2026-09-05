@@ -25,7 +25,6 @@
 package io.github.opencubicchunks.cubicchunks.api.world;
 
 import io.github.opencubicchunks.cubicchunks.api.util.CubePos;
-import net.minecraft.world.level.chunk.LevelChunk;
 
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
@@ -43,7 +42,7 @@ public interface ICubeProviderServer extends ICubeProvider {
      * @return the column, or {@code null} if no column could be created with the specified requirement level
      */
     @Nullable
-    LevelChunk getColumn(int columnX, int columnZ, Requirement req);
+    IColumn getColumn(int columnX, int columnZ, Requirement req);
 
     /**
      * Retrieve a cube. The work done to retrieve the cube is specified by {@link Requirement} {@code req}
