@@ -54,6 +54,9 @@ dependencies {
     // MC 26.2 is unobfuscated — use implementation, not modImplementation
     implementation "net.fabricmc:fabric-loader:${loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
+
+    // JSR-305 (javax.annotation.*) used by the ported CubicChunks API sources.
+    compileOnly 'com.google.code.findbugs:jsr305:3.0.2'
 }
 
 processResources {

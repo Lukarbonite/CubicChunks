@@ -14,6 +14,11 @@ compileJava.enabled = false
 jar.enabled = false
 tasks.matching { it.name == 'remapJar' }.configureEach { enabled = false }
 
+// Source-only container: it is never launched. Runnable tasks live on the version modules
+// (e.g. :mc26_2-fabric:runClient), which set the correct Java toolchain. Disabling these here
+// prevents accidentally running the container with the wrong JVM.
+tasks.matching { it.name in ['runClient', 'runServer'] }.configureEach { enabled = false }
+
 loom {
     noIntermediateMappings()
 }

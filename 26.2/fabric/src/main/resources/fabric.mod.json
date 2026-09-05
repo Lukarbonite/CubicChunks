@@ -17,6 +17,9 @@
 	"entrypoints": {
 		"main": [
 			"io.github.opencubicchunks.cubicchunks.CubicChunksFabric"
+		],
+		"client": [
+			"io.github.opencubicchunks.cubicchunks.client.CubicChunksFabricClient"
 		]
 	},
 	"mixins": [

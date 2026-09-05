@@ -12,6 +12,11 @@ compileJava.enabled = false
 jar.enabled = false
 tasks.matching { it.name == 'remapJar' }.configureEach { enabled = false }
 
+// Source-only container: it is never launched. Runnable tasks live on the version modules
+// (e.g. :mc26_2-fabric:runClient), which set the correct Java toolchain. Disabling these here
+// prevents accidentally running the container with the wrong JVM.
+tasks.matching { it.name in ['runClient', 'runServer'] }.configureEach { enabled = false }
+
 loom {
     noIntermediateMappings()
 }
@@ -25,4 +30,5 @@ dependencies {
     minecraft 'com.mojang:minecraft:26.2'
     implementation "net.fabricmc:fabric-loader:${loader_version}"
     implementation 'net.fabricmc.fabric-api:fabric-api:0.158.0+26.2'
+    compileOnly 'com.google.code.findbugs:jsr305:3.0.2'
 }
