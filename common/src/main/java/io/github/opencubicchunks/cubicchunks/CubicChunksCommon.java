@@ -13,6 +13,7 @@ import io.github.opencubicchunks.cubicchunks.api.world.storage.ICubicStorage;
 import io.github.opencubicchunks.cubicchunks.platform.PlatformHelper;
 import io.github.opencubicchunks.cubicchunks.platform.VersionHelper;
 import io.github.opencubicchunks.cubicchunks.server.CubeProviderServer;
+import io.github.opencubicchunks.cubicchunks.server.CubicTicket;
 import io.github.opencubicchunks.cubicchunks.world.ServerHeightMap;
 import io.github.opencubicchunks.cubicchunks.world.column.Column;
 import io.github.opencubicchunks.cubicchunks.world.column.CubeMap;
@@ -23,6 +24,7 @@ import io.github.opencubicchunks.cubicchunks.world.CubicLevelHeightAccessor;
 import io.github.opencubicchunks.cubicchunks.world.ICubicLevelChunk;
 import io.github.opencubicchunks.cubicchunks.world.storage.NbtFileCubicStorage;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.Identifier;
@@ -670,6 +672,7 @@ public final class CubicChunksCommon {
         }
         if (column == null) {
             column = mirrorChunkIntoColumn(level, chunk); // first visit: seed from vanilla terrain
+            relightExtendedSky(level, chunk);
             cubicChunk.cubicchunks$setCubic(column);
             return;
         }
@@ -678,7 +681,41 @@ public final class CubicChunksCommon {
         // terrain the chunk loaded with, so light matches the restored blocks (must read vanilla
         // sections before switching to cubic mode).
         relightLoadedEdits(level, chunk, column);
+        relightExtendedSky(level, chunk);
         cubicChunk.cubicchunks$setCubic(column);
+    }
+
+    /**
+     * Re-establishes skylight through the extended (above-vanilla) part of the column. When the level
+     * height is extended at runtime, the sky sections above the old vanilla max carry no light data on
+     * load (the saved lighting only covered the vanilla range), so they render pitch black even though
+     * they are empty air. This tells the light engine each section's current emptiness via
+     * {@link ThreadedLevelLightEngine#updateSectionStatus} (the same hook the chunk system fires when a
+     * section's air-status changes), which lets the sky-light storage flood daylight down through the
+     * now-known-empty sections; {@code propagateLightSources} re-emits any block-light sources.
+     *
+     * <p>Must run while the chunk is NOT yet in cubic mode, so {@code getSection} returns the real
+     * (mostly empty) vanilla sections across the full extended array rather than materializing a cube per
+     * sky slot. No-op unless population is enabled. The light updates are processed by the light engine
+     * on following ticks; restored solid blocks are re-darkened locally by {@link #relightLoadedEdits}.
+     */
+    private static void relightExtendedSky(ServerLevel level, LevelChunk chunk) {
+        if (!populationEnabled) {
+            return;
+        }
+        ThreadedLevelLightEngine lightEngine = level.getChunkSource().getLightEngine();
+        ChunkPos pos = chunk.getPos();
+        lightEngine.setLightEnabled(pos, true);
+
+        int minSectionY = level.getMinSectionY();
+        int maxSectionY = level.getMaxSectionY();
+        for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
+            int index = sectionY - minSectionY;
+            LevelChunkSection section = chunk.getSection(index); // cubic still off -> real section
+            boolean empty = section == null || section.hasOnlyAir();
+            lightEngine.updateSectionStatus(SectionPos.of(pos, sectionY), empty);
+        }
+        lightEngine.propagateLightSources(pos);
     }
 
     /**
@@ -913,6 +950,48 @@ public final class CubicChunksCommon {
         } finally {
             deleteRecursively(dir);
         }
+    }
+
+    /**
+     * Smoke-checks the ticket subsystem on the live overworld: force-loading a cube through
+     * {@code ServerLevel.forceChunk} makes it resident in the provider and reported as forced, a second
+     * ticket forcing the same cube keeps it loaded until both release (reference counting), the ticket's
+     * {@link CubicTicket#getAllForcedChunkCubes()} view reflects its forced set, and unforcing the last
+     * ticket clears it. Cleans up its own tickets so it leaves no forced cubes behind.
+     */
+    public static void verifyTicketSystem(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        if (!(overworld instanceof ICubicWorldServer world)) {
+            LOGGER.warn("Ticket check SKIPPED: overworld is not ICubicWorldServer");
+            return;
+        }
+
+        CubePos pos = new CubePos(1000, 3, 1000); // far from spawn so nothing else forces it
+        CubicTicket ticketA = new CubicTicket();
+        CubicTicket ticketB = new CubicTicket();
+
+        boolean notForcedBefore = world.getCubeCache().getLoadedCube(pos.getX(), pos.getY(), pos.getZ()) == null;
+
+        world.forceChunk(ticketA, pos);
+        boolean loadedAfterForce = world.getCubeCache().getLoadedCube(pos.getX(), pos.getY(), pos.getZ()) != null;
+        boolean ticketViewOk = ticketA.getAllForcedChunkCubes()
+                .getOrDefault(pos.chunkPos(), it.unimi.dsi.fastutil.ints.IntSets.EMPTY_SET)
+                .contains(pos.getY());
+
+        // Second ticket forces the same cube; releasing only the first must keep it forced.
+        world.forceChunk(ticketB, pos);
+        world.unforceChunk(ticketA, pos);
+        boolean stillLoadedReason = world.getCubeCache().getLoadedCube(pos.getX(), pos.getY(), pos.getZ()) != null;
+        boolean ticketACleared = ticketA.forcedCount() == 0;
+
+        // Last release: idempotent double-unforce must not throw or under-count.
+        world.unforceChunk(ticketB, pos);
+        world.unforceChunk(ticketB, pos);
+        boolean bothCleared = ticketB.forcedCount() == 0;
+
+        LOGGER.info("Ticket check: notForcedBefore={}, loadedAfterForce={}, ticketViewOk={}, "
+                        + "keptBySecondTicket={}, ticketACleared={}, bothCleared={}",
+                notForcedBefore, loadedAfterForce, ticketViewOk, stillLoadedReason, ticketACleared, bothCleared);
     }
 
     private static void deleteRecursively(@javax.annotation.Nullable Path dir) {

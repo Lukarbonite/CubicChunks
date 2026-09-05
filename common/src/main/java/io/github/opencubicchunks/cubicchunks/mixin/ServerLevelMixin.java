@@ -33,6 +33,7 @@ import io.github.opencubicchunks.cubicchunks.api.world.ICubicWorldServer;
 import io.github.opencubicchunks.cubicchunks.api.worldgen.ICubeGenerator;
 import io.github.opencubicchunks.cubicchunks.api.world.ICubicTicket;
 import io.github.opencubicchunks.cubicchunks.server.CubeProviderServer;
+import io.github.opencubicchunks.cubicchunks.server.CubicTicketManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import org.spongepowered.asm.mixin.Mixin;
@@ -47,16 +48,19 @@ import java.util.function.Predicate;
  * from {@code LevelMixin} on the shared {@link net.minecraft.world.level.Level} supertype.
  *
  * <p><b>Partial port.</b> With no disk IO or generator yet, {@code getCubeCache()} hands back the
- * in-memory provider; the generation and ticket subsystems ({@link #getCubeGenerator},
- * {@link #forceChunk}/{@link #reorderChunk}/{@link #unforceChunk}) throw until they are ported, and
- * {@link #unloadOldCubes} is a documented no-op (vanilla drives unloading). {@link #isCubicWorld}
- * returns {@code true} unconditionally for now; gating it on a per-world flag arrives with the
- * world-type / world-preset port.
+ * in-memory provider; the generation subsystem ({@link #getCubeGenerator}) throws until it is ported.
+ * The ticket subsystem ({@link #forceChunk}/{@link #reorderChunk}/{@link #unforceChunk}) is backed by a
+ * loader-neutral {@link CubicTicketManager} that tracks force-loads and keeps forced cubes resident in
+ * the provider; {@link #unloadOldCubes} is a documented no-op (vanilla drives unloading, and the manager
+ * exposes which cubes are forced for the future unload bridge). {@link #isCubicWorld} returns
+ * {@code true} unconditionally for now; gating it on a per-world flag arrives with the world-type /
+ * world-preset port.
  */
 @Mixin(ServerLevel.class)
 public abstract class ServerLevelMixin implements ICubicWorldServer {
 
     @Unique private CubeProviderServer cubicchunks$cubeProvider;
+    @Unique private CubicTicketManager cubicchunks$ticketManager;
 
     @Override
     public ICubeProviderServer getCubeCache() {
@@ -154,20 +158,33 @@ public abstract class ServerLevelMixin implements ICubicWorldServer {
     @Override
     public void unloadOldCubes() {
         // No-op: automatic cube unloading is driven by vanilla's chunk system, not yet bridged here.
+        // When that bridge lands it must skip cubes the ticket manager still reports as forced.
+    }
+
+    /**
+     * The per-world force-load registry, created lazily on the same provider {@link #getCubeCache}
+     * returns so forced cubes and cached cubes share one index.
+     */
+    @Unique
+    private CubicTicketManager cubicchunks$ticketManager() {
+        if (cubicchunks$ticketManager == null) {
+            cubicchunks$ticketManager = new CubicTicketManager(getCubeCache());
+        }
+        return cubicchunks$ticketManager;
     }
 
     @Override
     public void forceChunk(ICubicTicket ticket, CubePos chunk) {
-        throw new UnsupportedOperationException("Ticket system not ported yet");
+        cubicchunks$ticketManager().forceChunk(ticket, chunk);
     }
 
     @Override
     public void reorderChunk(ICubicTicket ticket, CubePos chunk) {
-        throw new UnsupportedOperationException("Ticket system not ported yet");
+        cubicchunks$ticketManager().reorderChunk(ticket, chunk);
     }
 
     @Override
     public void unforceChunk(ICubicTicket ticket, CubePos chunk) {
-        throw new UnsupportedOperationException("Ticket system not ported yet");
+        cubicchunks$ticketManager().unforceChunk(ticket, chunk);
     }
 }

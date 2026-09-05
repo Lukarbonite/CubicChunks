@@ -41,6 +41,7 @@ public class CubicChunksFabric implements ModInitializer {
             CubicChunksCommon.verifyPopulation(server);
             CubicChunksCommon.verifyPersistence();
             CubicChunksCommon.verifyExtendedHeight(server);
+            CubicChunksCommon.verifyTicketSystem(server);
         });
 
         // When population is enabled (-Dcubicchunks.population=true), put each chunk into cubic mode as
