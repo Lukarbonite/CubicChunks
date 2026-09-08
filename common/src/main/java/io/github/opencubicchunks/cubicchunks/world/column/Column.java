@@ -34,6 +34,7 @@ import io.github.opencubicchunks.cubicchunks.world.cube.Cube;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.world.level.chunk.PalettedContainerFactory;
 
 import javax.annotation.Nullable;
 import java.util.Collection;
@@ -171,7 +172,7 @@ public class Column implements IColumn {
      * @return {@code tag}, for chaining
      */
     public CompoundTag writeToNbt(CompoundTag tag) {
-        return writeToNbt(tag, true);
+        return writeToNbt(tag, true, null);
     }
 
     /**
@@ -188,6 +189,20 @@ public class Column implements IColumn {
      * @return {@code tag}, for chaining
      */
     public CompoundTag writeToNbt(CompoundTag tag, boolean includeCubes) {
+        return writeToNbt(tag, includeCubes, null);
+    }
+
+    /**
+     * As {@link #writeToNbt(CompoundTag, boolean)}, but a non-null {@code factory} is passed to each
+     * bundled cube so its biomes are serialized too (biomes need the world's biome registry, which the
+     * factory carries). With {@code factory == null} the cubes write block states only.
+     *
+     * @param tag the compound to write into
+     * @param includeCubes whether to bundle the column's cubes into {@code tag}
+     * @param factory the factory for biome serialization, or {@code null} for block states only
+     * @return {@code tag}, for chaining
+     */
+    public CompoundTag writeToNbt(CompoundTag tag, boolean includeCubes, @Nullable PalettedContainerFactory factory) {
         tag.putInt(NBT_X, x);
         tag.putInt(NBT_Z, z);
         tag.putByteArray(NBT_OPACITY_INDEX, ((ServerHeightMap) opacityIndex).getData());
@@ -197,7 +212,7 @@ public class Column implements IColumn {
             for (Cube cube : cubeMap) {
                 CompoundTag cubeTag = new CompoundTag();
                 cubeTag.putInt(NBT_CUBE_Y, cube.getY());
-                cube.writeToNbt(cubeTag);
+                cube.writeToNbt(cubeTag, factory);
                 cubesTag.add(cubesTag.size(), cubeTag);
             }
             tag.put(NBT_CUBES, cubesTag);
@@ -213,6 +228,17 @@ public class Column implements IColumn {
      * @param tag the compound to read from
      */
     public void readFromNbt(CompoundTag tag) {
+        readFromNbt(tag, null);
+    }
+
+    /**
+     * As {@link #readFromNbt(CompoundTag)}, but a non-null {@code factory} is passed to each cube so its
+     * stored biomes are restored too (must be the same kind of factory used to write them).
+     *
+     * @param tag the compound to read from
+     * @param factory the factory for biome deserialization, or {@code null} for block states only
+     */
+    public void readFromNbt(CompoundTag tag, @Nullable PalettedContainerFactory factory) {
         tag.getByteArray(NBT_OPACITY_INDEX)
                 .ifPresent(data -> ((ServerHeightMap) opacityIndex).readData(data));
 
@@ -222,7 +248,7 @@ public class Column implements IColumn {
             CompoundTag cubeTag = cubesTag.getCompoundOrEmpty(i);
             int cubeY = cubeTag.getIntOr(NBT_CUBE_Y, 0);
             Cube cube = new Cube(new CubePos(x, cubeY, z));
-            cube.readFromNbt(cubeTag);
+            cube.readFromNbt(cubeTag, factory);
             cubeMap.put(cube);
         }
     }

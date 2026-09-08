@@ -12,6 +12,7 @@ import io.github.opencubicchunks.cubicchunks.api.world.ICubeProviderServer;
 import io.github.opencubicchunks.cubicchunks.api.world.storage.ICubicStorage;
 import io.github.opencubicchunks.cubicchunks.platform.PlatformHelper;
 import io.github.opencubicchunks.cubicchunks.platform.VersionHelper;
+import io.github.opencubicchunks.cubicchunks.server.CubePopulator;
 import io.github.opencubicchunks.cubicchunks.server.CubeProviderServer;
 import io.github.opencubicchunks.cubicchunks.server.CubicTicket;
 import io.github.opencubicchunks.cubicchunks.world.ServerHeightMap;
@@ -23,6 +24,7 @@ import io.github.opencubicchunks.cubicchunks.world.cube.EntityContainer;
 import io.github.opencubicchunks.cubicchunks.world.CubicLevelHeightAccessor;
 import io.github.opencubicchunks.cubicchunks.world.ICubicLevelChunk;
 import io.github.opencubicchunks.cubicchunks.world.storage.NbtFileCubicStorage;
+import io.github.opencubicchunks.cubicchunks.worldgen.CubeWorldGenRegion;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -31,13 +33,18 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ThreadedLevelLightEngine;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.NoiseColumn;
+import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -638,6 +645,7 @@ public final class CubicChunksCommon {
             }
             Cube cube = new Cube(new CubePos(columnX, minSectionY + i, columnZ));
             cube.setBlockStates(s.getStates().copy());
+            cube.setBiomes(s.getBiomes().copy()); // carry vanilla biomes so they render and persist
             column.addCube(cube);
         }
         return column;
@@ -666,7 +674,8 @@ public final class CubicChunksCommon {
         ICubicStorage storage = storageFor(level);
         if (storage != null) {
             try {
-                column = loadColumn(storage, chunk.getPos().x(), chunk.getPos().z());
+                column = loadColumn(storage, chunk.getPos().x(), chunk.getPos().z(),
+                        PalettedContainerFactory.create(level.registryAccess()));
             } catch (IOException e) {
                 LOGGER.error("Failed to load cubic column [{}, {}]", chunk.getPos().x(), chunk.getPos().z(), e);
             }
@@ -774,7 +783,7 @@ public final class CubicChunksCommon {
             return;
         }
         try {
-            saveColumn(storage, column);
+            saveColumn(storage, column, PalettedContainerFactory.create(level.registryAccess()));
         } catch (IOException e) {
             LOGGER.error("Failed to save cubic column [{}, {}]", column.getX(), column.getZ(), e);
         }
@@ -826,7 +835,23 @@ public final class CubicChunksCommon {
      * @throws IOException on IO error
      */
     public static void saveColumn(ICubicStorage storage, Column column) throws IOException {
-        storage.writeColumn(new ChunkPos(column.getX(), column.getZ()), column.writeToNbt(new CompoundTag(), true));
+        saveColumn(storage, column, null);
+    }
+
+    /**
+     * As {@link #saveColumn(ICubicStorage, Column)}, but a non-null {@code factory} serializes each cube's
+     * biomes too. The live persistence path passes the level's factory; the block-only overload is for
+     * callers with no world (e.g. the storage smoke test).
+     *
+     * @param storage the cubic storage
+     * @param column the column to save
+     * @param factory the factory for biome serialization, or {@code null} for block states only
+     * @throws IOException on IO error
+     */
+    public static void saveColumn(ICubicStorage storage, Column column,
+                                  @javax.annotation.Nullable PalettedContainerFactory factory) throws IOException {
+        storage.writeColumn(new ChunkPos(column.getX(), column.getZ()),
+                column.writeToNbt(new CompoundTag(), true, factory));
     }
 
     /**
@@ -841,12 +866,29 @@ public final class CubicChunksCommon {
      */
     @javax.annotation.Nullable
     public static Column loadColumn(ICubicStorage storage, int x, int z) throws IOException {
+        return loadColumn(storage, x, z, null);
+    }
+
+    /**
+     * As {@link #loadColumn(ICubicStorage, int, int)}, but a non-null {@code factory} restores each cube's
+     * stored biomes too (must match the factory used to save them).
+     *
+     * @param storage the cubic storage
+     * @param x the column x
+     * @param z the column z
+     * @param factory the factory for biome deserialization, or {@code null} for block states only
+     * @return the loaded column, or {@code null}
+     * @throws IOException on IO error
+     */
+    @javax.annotation.Nullable
+    public static Column loadColumn(ICubicStorage storage, int x, int z,
+                                    @javax.annotation.Nullable PalettedContainerFactory factory) throws IOException {
         CompoundTag tag = storage.readColumn(new ChunkPos(x, z));
         if (tag == null) {
             return null;
         }
         Column column = new Column(x, z);
-        column.readFromNbt(tag);
+        column.readFromNbt(tag, factory);
         return column;
     }
 
@@ -1119,6 +1161,423 @@ public final class CubicChunksCommon {
         LOGGER.info("Ticket check: notForcedBefore={}, loadedAfterForce={}, ticketViewOk={}, "
                         + "keptBySecondTicket={}, ticketACleared={}, bothCleared={}",
                 notForcedBefore, loadedAfterForce, ticketViewOk, stillLoadedReason, ticketACleared, bothCleared);
+    }
+
+    /**
+     * Smoke-checks base-terrain generation on the live overworld's provider (the same provider the world
+     * exposes through {@code getCubeCache}, with the {@code NoiseCubeGenerator} wired in by
+     * {@code ServerLevelMixin}). Requesting a cube at {@code GENERATE} now fills it with the world's real
+     * vanilla terrain. Finds the vanilla surface height for a column far from spawn, generates the cube
+     * that surface sits in, and asserts (1) the cube's block states match vanilla's {@code getBaseColumn}
+     * for that column exactly, (2) the block just below the surface is solid, and (3) the cube holds
+     * terrain (is not all air). Uses a column far from spawn so it does not disturb loaded terrain, and
+     * asserts nothing about the world save (this cube is in-memory only).
+     */
+    public static void verifyGeneration(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        if (!(overworld instanceof ICubicWorldServer world)) {
+            LOGGER.warn("Generation check SKIPPED: overworld is not ICubicWorldServer");
+            return;
+        }
+
+        ChunkGenerator generator = overworld.getChunkSource().getGenerator();
+        RandomState randomState = overworld.getChunkSource().randomState();
+
+        int cubeX = 2000; // far from spawn so nothing else touches this column
+        int cubeZ = 2000;
+        int blockX = cubeX * 16;
+        int blockZ = cubeZ * 16;
+
+        // Vanilla surface height for this column, and the cube that the top solid block sits in.
+        int surfaceY = generator.getBaseHeight(blockX, blockZ, Heightmap.Types.WORLD_SURFACE, overworld, randomState);
+        int cubeY = Math.floorDiv(surfaceY - 1, 16);
+
+        ICube cube = world.getCubeCache().getCube(cubeX, cubeY, cubeZ, ICubeProviderServer.Requirement.GENERATE);
+        NoiseColumn reference = generator.getBaseColumn(blockX, blockZ, overworld, randomState);
+
+        int minY = overworld.getMinY();
+        int maxYExclusive = minY + overworld.getHeight();
+
+        boolean matchesVanilla = cube != null;
+        if (cube != null) {
+            for (int localY = 0; localY < 16; localY++) {
+                int worldY = cubeY * 16 + localY;
+                if (worldY < minY || worldY >= maxYExclusive) {
+                    continue;
+                }
+                if (cube.getBlockState(new BlockPos(blockX, worldY, blockZ)) != reference.getBlock(worldY)) {
+                    matchesVanilla = false;
+                    break;
+                }
+            }
+        }
+
+        boolean surfaceSolid = cube != null
+                && !cube.getBlockState(new BlockPos(blockX, surfaceY - 1, blockZ)).isAir();
+        boolean hasTerrain = cube != null && !cube.isEmpty();
+
+        LOGGER.info("Generation check (noise): matchesVanilla={}, surfaceSolid={}, hasTerrain={}, surfaceY={}",
+                matchesVanilla, surfaceSolid, hasTerrain, surfaceY);
+    }
+
+    /**
+     * Smoke-checks biome carrying: a generated cube's section holds the world's real vanilla biomes.
+     * Generates a cube far from spawn, builds its {@code LevelChunkSection} (which now wraps the biome
+     * container the {@code NoiseCubeGenerator} produced), and asserts every one of the section's 4x4x4
+     * biome cells equals what vanilla's {@code BiomeSource} returns for the same quart position. Logs a
+     * sample biome id for context. In-memory only; asserts nothing about the world save.
+     */
+    public static void verifyBiomes(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        if (!(overworld instanceof ICubicWorldServer world)) {
+            LOGGER.warn("Biome check SKIPPED: overworld is not ICubicWorldServer");
+            return;
+        }
+
+        ChunkGenerator generator = overworld.getChunkSource().getGenerator();
+        RandomState randomState = overworld.getChunkSource().randomState();
+        var biomeSource = generator.getBiomeSource();
+        var sampler = randomState.sampler();
+        var factory = PalettedContainerFactory.create(overworld.registryAccess());
+
+        int cubeX = 2000; // far from spawn so nothing else touches this column
+        int cubeY = 4;
+        int cubeZ = 2000;
+
+        ICube cube = world.getCubeCache().getCube(cubeX, cubeY, cubeZ, ICubeProviderServer.Requirement.GENERATE);
+        boolean matchesVanilla = false;
+        if (cube instanceof Cube concrete) {
+            LevelChunkSection section = concrete.getOrCreateSection(factory);
+            matchesVanilla = true;
+            for (int qx = 0; qx < 4 && matchesVanilla; qx++) {
+                for (int qy = 0; qy < 4 && matchesVanilla; qy++) {
+                    for (int qz = 0; qz < 4; qz++) {
+                        var actual = section.getNoiseBiome(qx, qy, qz);
+                        var expected = biomeSource.getNoiseBiome(
+                                cubeX * 4 + qx, cubeY * 4 + qy, cubeZ * 4 + qz, sampler);
+                        if (actual.value() != expected.value()) {
+                            matchesVanilla = false;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        var sampleBiome = biomeSource.getNoiseBiome(cubeX * 4, cubeY * 4, cubeZ * 4, sampler);
+        String sampleName = sampleBiome.unwrapKey().map(key -> key.identifier().toString()).orElse("<unnamed>");
+        LOGGER.info("Biome check: matchesVanilla={}, sampleBiome={}", matchesVanilla, sampleName);
+    }
+
+    /**
+     * Smoke-checks biome persistence: a generated cube's biomes survive an NBT save/load round trip.
+     * Generates a cube (with biomes) far from spawn, bundles its column to NBT with the world's factory,
+     * reads it back into a fresh column with the same factory, builds the restored cube's section, and
+     * asserts every biome cell still matches vanilla's {@code BiomeSource}. In-memory only.
+     */
+    public static void verifyBiomePersistence(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        if (!(overworld instanceof ICubicWorldServer world)) {
+            LOGGER.warn("Biome persistence check SKIPPED: overworld is not ICubicWorldServer");
+            return;
+        }
+
+        var factory = PalettedContainerFactory.create(overworld.registryAccess());
+        var biomeSource = overworld.getChunkSource().getGenerator().getBiomeSource();
+        var sampler = overworld.getChunkSource().randomState().sampler();
+
+        int cubeX = 2001; // distinct column from the other generation checks
+        int cubeY = 3;
+        int cubeZ = 2001;
+
+        ICube generated = world.getCubeCache().getCube(cubeX, cubeY, cubeZ, ICubeProviderServer.Requirement.GENERATE);
+
+        // Bundle a source column holding the generated cube, then round-trip through NBT with the factory.
+        Column source = new Column(cubeX, cubeZ);
+        source.addCube(generated);
+        CompoundTag tag = source.writeToNbt(new CompoundTag(), true, factory);
+
+        Column restored = new Column(cubeX, cubeZ);
+        restored.readFromNbt(tag, factory);
+        ICube restoredCube = restored.getLoadedCube(cubeY);
+
+        boolean roundTripped = restoredCube instanceof Cube;
+        boolean biomesMatch = false;
+        if (restoredCube instanceof Cube concrete) {
+            LevelChunkSection section = concrete.getOrCreateSection(factory);
+            biomesMatch = true;
+            for (int qx = 0; qx < 4 && biomesMatch; qx++) {
+                for (int qy = 0; qy < 4 && biomesMatch; qy++) {
+                    for (int qz = 0; qz < 4; qz++) {
+                        var actual = section.getNoiseBiome(qx, qy, qz);
+                        var expected = biomeSource.getNoiseBiome(
+                                cubeX * 4 + qx, cubeY * 4 + qy, cubeZ * 4 + qz, sampler);
+                        if (actual.value() != expected.value()) {
+                            biomesMatch = false;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        LOGGER.info("Biome persistence check: roundTripped={}, biomesMatch={}", roundTripped, biomesMatch);
+    }
+
+    /**
+     * Smoke-checks the populate (decoration) generation stage as a state transition. Requesting a cube at
+     * {@code Requirement.POPULATE} runs the generator's decoration (real feature placement) and marks the
+     * cube populated, while a {@code GENERATE}-only cube stays unpopulated; the flag survives an NBT round
+     * trip. Uses cubes high above terrain (all air), where real features place at the far-below surface
+     * and their writes fall outside the cube, so this checks the stage/flag transition (see
+     * {@code verifyRealFeatures} for actual block changes).
+     */
+    public static void verifyPopulateStage(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        if (!(overworld instanceof ICubicWorldServer world)) {
+            LOGGER.warn("Populate stage check SKIPPED: overworld is not ICubicWorldServer");
+            return;
+        }
+
+        ICubeProviderServer cache = world.getCubeCache();
+        int cubeX = 2002; // far from spawn, distinct from other generation checks
+        int cubeZ = 2002;
+        int decoratedY = 30; // well above any terrain/height window -> all air
+        int generateOnlyY = 31;
+
+        ICube decorated = cache.getCube(cubeX, decoratedY, cubeZ, ICubeProviderServer.Requirement.POPULATE);
+        boolean flagSet = decorated instanceof Cube dc && dc.isPopulated();
+
+        ICube generateOnly = cache.getCube(cubeX, generateOnlyY, cubeZ, ICubeProviderServer.Requirement.GENERATE);
+        boolean generateOnlyUnpopulated = !(generateOnly instanceof Cube gc && gc.isPopulated());
+
+        boolean flagPersists = false;
+        if (decorated instanceof Cube concrete) {
+            CompoundTag tag = concrete.writeToNbt(new CompoundTag());
+            Cube reloaded = new Cube(new CubePos(cubeX, decoratedY, cubeZ));
+            reloaded.readFromNbt(tag);
+            flagPersists = reloaded.isPopulated();
+        }
+
+        LOGGER.info("Populate stage check: flagSet={}, generateOnlyUnpopulated={}, flagPersists={}",
+                flagSet, generateOnlyUnpopulated, flagPersists);
+    }
+
+    /**
+     * Smoke-checks the 3D neighbour population-offset scheme (the {@link CubePopulator}). Verifies the
+     * pull path: a cube is not population-ready until its 3x3x3 neighbourhood is generated, and
+     * {@code ensurePopulated} generates that neighbourhood and decorates only the centre cube (once,
+     * idempotently). Verifies the push path: with a neighbourhood pre-generated but undecorated,
+     * {@code onCubeGenerated} decorates the now-ready centre but not neighbours whose own neighbourhood is
+     * still incomplete. Uses all-air cubes far from spawn; "decorated" is tracked by the populated flag
+     * (real feature writes at the far-below surface fall outside these cubes).
+     */
+    public static void verifyNeighborPopulation(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        if (!(overworld instanceof ICubicWorldServer world)) {
+            LOGGER.warn("Neighbour population check SKIPPED: overworld is not ICubicWorldServer");
+            return;
+        }
+        if (!(world.getCubeCache() instanceof CubeProviderServer provider) || provider.getPopulator() == null) {
+            LOGGER.warn("Neighbour population check SKIPPED: no populator on the provider");
+            return;
+        }
+        CubePopulator populator = provider.getPopulator();
+
+        // --- Pull path: ensurePopulated generates the neighbourhood, then decorates only the centre. ---
+        CubePos centre = new CubePos(3000, 40, 3000); // all air (far above any height window)
+        boolean readyBefore = !populator.isPopulationReady(centre);
+
+        populator.ensurePopulated(centre);
+
+        boolean readyAfter = populator.isPopulationReady(centre);
+        boolean centrePopulated = isCubePopulated(provider, centre);
+        boolean neighbourNotDecorated = !isCubePopulated(provider, new CubePos(3001, 40, 3000));
+
+        populator.ensurePopulated(centre); // idempotent: the populated flag prevents re-decoration
+        boolean idempotent = isCubePopulated(provider, centre);
+
+        // --- Push path: pre-generate a neighbourhood (no decoration), then trigger onCubeGenerated. ---
+        CubePos pushCentre = new CubePos(3100, 40, 3100);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    provider.getCube(pushCentre.getX() + dx, pushCentre.getY() + dy, pushCentre.getZ() + dz,
+                            ICubeProviderServer.Requirement.GENERATE);
+                }
+            }
+        }
+        boolean pushReadyUndecorated = populator.isPopulationReady(pushCentre) && !isCubePopulated(provider, pushCentre);
+
+        populator.onCubeGenerated(pushCentre);
+
+        boolean pushDecoratedCentre = isCubePopulated(provider, pushCentre);
+        // A neighbour whose own neighbourhood is not fully generated must stay undecorated.
+        boolean pushNeighbourUntouched = !isCubePopulated(provider, new CubePos(3101, 40, 3100));
+
+        LOGGER.info("Neighbour population check: readyGating={}, centrePopulated={}, "
+                        + "neighbourNotDecorated={}, idempotent={}, pushReadyUndecorated={}, "
+                        + "pushDecoratedCentre={}, pushNeighbourUntouched={}",
+                readyBefore && readyAfter, centrePopulated, neighbourNotDecorated,
+                idempotent, pushReadyUndecorated, pushDecoratedCentre, pushNeighbourUntouched);
+    }
+
+    /**
+     * Smoke-checks the cube-backed {@link CubeWorldGenRegion} adapter. Generates a cube neighbourhood,
+     * builds a region over it, and verifies: a write through the region lands in the actual cube and
+     * reads back; {@code getHeight} reflects the write; a write outside the neighbourhood is dropped and
+     * reads as air; and the delegated getters (seed, registry, dimension, biome) work. Does not run real
+     * feature placement yet (that is the next slice). In-memory, far from spawn.
+     */
+    public static void verifyWorldGenAdapter(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        if (!(overworld instanceof ICubicWorldServer world)) {
+            LOGGER.warn("WorldGen adapter check SKIPPED: overworld is not ICubicWorldServer");
+            return;
+        }
+        if (!(world.getCubeCache() instanceof CubeProviderServer provider)) {
+            LOGGER.warn("WorldGen adapter check SKIPPED: provider is not CubeProviderServer");
+            return;
+        }
+
+        int cubeX = 3200; // all air, far from the other checks
+        int cubeY = 40;
+        int cubeZ = 3200;
+        int radius = 1;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    provider.getCube(cubeX + dx, cubeY + dy, cubeZ + dz, ICubeProviderServer.Requirement.GENERATE);
+                }
+            }
+        }
+
+        var biomeSource = overworld.getChunkSource().getGenerator().getBiomeSource();
+        var sampler = overworld.getChunkSource().randomState().sampler();
+        var factory = PalettedContainerFactory.create(overworld.registryAccess());
+        CubePos centre = new CubePos(cubeX, cubeY, cubeZ);
+        CubeWorldGenRegion region = new CubeWorldGenRegion(overworld, provider, centre, radius,
+                RandomSource.create(overworld.getSeed()), biomeSource, sampler, factory);
+
+        BlockState stone = Blocks.STONE.defaultBlockState();
+        BlockPos inside = new BlockPos(cubeX * 16 + 5, cubeY * 16 + 5, cubeZ * 16 + 5);
+
+        boolean airBefore = region.getBlockState(inside).isAir();
+        region.setBlock(inside, stone, 3, 512);
+        boolean writeReadOk = airBefore && region.getBlockState(inside) == stone;
+
+        int height = region.getHeight(Heightmap.Types.WORLD_SURFACE, inside.getX(), inside.getZ());
+        boolean heightReflectsWrite = height == inside.getY() + 1;
+
+        BlockPos outside = new BlockPos((cubeX + radius + 2) * 16, cubeY * 16, cubeZ * 16);
+        boolean outOfBoundsRejected = !region.setBlock(outside, stone, 3, 512)
+                && region.getBlockState(outside).isAir();
+
+        ICube cube = provider.getLoadedCube(cubeX, cubeY, cubeZ);
+        boolean landedInCube = cube != null && cube.getBlockState(inside) == stone;
+
+        boolean delegationOk = region.getSeed() == overworld.getSeed()
+                && region.registryAccess() != null
+                && region.dimensionType() != null
+                && region.getUncachedNoiseBiome(cubeX * 4, cubeY * 4, cubeZ * 4) != null;
+
+        LOGGER.info("WorldGen adapter check: writeReadOk={}, heightReflectsWrite={}, outOfBoundsRejected={}, "
+                        + "landedInCube={}, delegationOk={}",
+                writeReadOk, heightReflectsWrite, outOfBoundsRejected, landedInCube, delegationOk);
+    }
+
+    /**
+     * Smoke-checks real feature placement through the cube WorldGenLevel adapter. Finds a surface cube,
+     * generates its neighbourhood, snapshots the cube's blocks, then requests it at {@code POPULATE} (which
+     * runs vanilla {@code applyBiomeDecoration} against a {@link CubeWorldGenRegion}, writes clamped to the
+     * cube). Asserts the cube is marked populated and that decoration actually changed blocks in it (ores,
+     * plants, etc.). In-memory, far from spawn.
+     */
+    public static void verifyRealFeatures(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        if (!(overworld instanceof ICubicWorldServer world)) {
+            LOGGER.warn("Real features check SKIPPED: overworld is not ICubicWorldServer");
+            return;
+        }
+        if (!(world.getCubeCache() instanceof CubeProviderServer provider)) {
+            LOGGER.warn("Real features check SKIPPED: provider is not CubeProviderServer");
+            return;
+        }
+
+        ChunkGenerator generator = overworld.getChunkSource().getGenerator();
+        RandomState randomState = overworld.getChunkSource().randomState();
+        int cubeX = 3300; // far column, distinct from the other checks
+        int cubeZ = 3300;
+        int blockX = cubeX * 16;
+        int blockZ = cubeZ * 16;
+        int surfaceY = generator.getBaseHeight(blockX, blockZ, Heightmap.Types.WORLD_SURFACE, overworld, randomState);
+        int surfaceCubeY = Math.floorDiv(surfaceY - 1, 16);
+        // Decorate a short vertical stack from the surface cube down into stone/ocean floor, where ores and
+        // floor features actually generate (the surface cube alone can be all water/air). Sum the changes.
+        int topCubeY = surfaceCubeY;
+        int bottomCubeY = surfaceCubeY - 2;
+
+        int totalChanged = 0;
+        int populatedCubes = 0;
+        int cubesWithChanges = 0;
+        for (int cy = topCubeY; cy >= bottomCubeY; cy--) {
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        provider.getCube(cubeX + dx, cy + dy, cubeZ + dz, ICubeProviderServer.Requirement.GENERATE);
+                    }
+                }
+            }
+            ICube cube = provider.getLoadedCube(cubeX, cy, cubeZ);
+            if (cube == null) {
+                continue;
+            }
+            BlockState[] before = new BlockState[ICube.SIZE * ICube.SIZE * ICube.SIZE];
+            int i = 0;
+            for (int y = 0; y < ICube.SIZE; y++) {
+                for (int z = 0; z < ICube.SIZE; z++) {
+                    for (int x = 0; x < ICube.SIZE; x++) {
+                        before[i++] = cube.getBlockState(new BlockPos(blockX + x, cy * 16 + y, blockZ + z));
+                    }
+                }
+            }
+
+            provider.getCube(cubeX, cy, cubeZ, ICubeProviderServer.Requirement.POPULATE);
+
+            int changed = 0;
+            i = 0;
+            for (int y = 0; y < ICube.SIZE; y++) {
+                for (int z = 0; z < ICube.SIZE; z++) {
+                    for (int x = 0; x < ICube.SIZE; x++) {
+                        if (cube.getBlockState(new BlockPos(blockX + x, cy * 16 + y, blockZ + z)) != before[i++]) {
+                            changed++;
+                        }
+                    }
+                }
+            }
+            totalChanged += changed;
+            if (changed > 0) {
+                cubesWithChanges++;
+            }
+            if (cube instanceof Cube c && c.isPopulated()) {
+                populatedCubes++;
+            }
+        }
+
+        int stackSize = topCubeY - bottomCubeY + 1;
+        String biome = generator.getBiomeSource()
+                .getNoiseBiome(cubeX * 4, surfaceCubeY * 4, cubeZ * 4, randomState.sampler())
+                .unwrapKey().map(key -> key.identifier().toString()).orElse("<unnamed>");
+
+        LOGGER.info("Real features check: featuresPlaced={}, totalChanged={}, cubesWithChanges={}/{}, "
+                        + "populatedCubes={}/{}, surfaceY={}, biome={}",
+                totalChanged > 0, totalChanged, cubesWithChanges, stackSize, populatedCubes, stackSize,
+                surfaceY, biome);
+    }
+
+    /** Whether the loaded cube at {@code pos} exists and has been populated. */
+    private static boolean isCubePopulated(CubeProviderServer provider, CubePos pos) {
+        return provider.getLoadedCube(pos.getX(), pos.getY(), pos.getZ()) instanceof Cube cube && cube.isPopulated();
     }
 
     private static void deleteRecursively(@javax.annotation.Nullable Path dir) {

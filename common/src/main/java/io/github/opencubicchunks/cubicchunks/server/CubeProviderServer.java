@@ -29,10 +29,13 @@ import io.github.opencubicchunks.cubicchunks.api.world.ICube;
 import io.github.opencubicchunks.cubicchunks.api.world.IColumn;
 import io.github.opencubicchunks.cubicchunks.api.world.ICubeProviderServer;
 import io.github.opencubicchunks.cubicchunks.api.world.storage.ICubicStorage;
+import io.github.opencubicchunks.cubicchunks.api.worldgen.CubePrimer;
+import io.github.opencubicchunks.cubicchunks.api.worldgen.ICubeGenerator;
 import io.github.opencubicchunks.cubicchunks.world.column.Column;
 import io.github.opencubicchunks.cubicchunks.world.cube.Cube;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.state.BlockState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,6 +74,16 @@ public class CubeProviderServer implements ICubeProviderServer {
     /** Backing disk storage, or {@code null} for a pure in-memory provider. */
     @Nullable private final ICubicStorage storage;
 
+    /**
+     * Base-terrain generator, or {@code null} for none. When {@code null}, {@link Requirement#GENERATE}
+     * yields an empty (all-air) cube exactly as before, which keeps ordinary worlds vanilla until a world
+     * opts in. When set, a cache/disk miss at {@code GENERATE} or above fills the new cube from it.
+     */
+    @Nullable private ICubeGenerator generator;
+
+    /** The neighbour-gated populate driver, created with the generator (rebuilt when it changes). */
+    @Nullable private CubePopulator populator;
+
     /** Creates a pure in-memory provider (no disk persistence). */
     public CubeProviderServer() {
         this(null);
@@ -84,6 +97,27 @@ public class CubeProviderServer implements ICubeProviderServer {
      */
     public CubeProviderServer(@Nullable ICubicStorage storage) {
         this.storage = storage;
+    }
+
+    /**
+     * Sets (or clears, with {@code null}) the base-terrain generator used by {@link Requirement#GENERATE}
+     * and above.
+     */
+    public void setGenerator(@Nullable ICubeGenerator generator) {
+        this.generator = generator;
+        this.populator = generator == null ? null : new CubePopulator(this, generator);
+    }
+
+    /** The neighbour-gated populate driver for this provider, or {@code null} if no generator is set. */
+    @Nullable
+    public CubePopulator getPopulator() {
+        return populator;
+    }
+
+    /** The base-terrain generator, or {@code null} if none is set. */
+    @Nullable
+    public ICubeGenerator getGenerator() {
+        return generator;
     }
 
     // ==========================================================================
@@ -185,22 +219,59 @@ public class CubeProviderServer implements ICubeProviderServer {
             return null;
         }
 
-        ICube loaded = column.getLoadedCube(cubeY);
-        if (loaded != null) {
-            return loaded;
+        // Resolve the cube: cached, then from disk, then (for GENERATE and above) freshly generated.
+        ICube cube = column.getLoadedCube(cubeY);
+        if (cube == null) {
+            cube = loadCubeFromStorage(column, cubeX, cubeY, cubeZ);
         }
+        if (cube == null) {
+            if (req == Requirement.LOAD) {
+                // LOAD must not generate: the cube is neither cached nor on disk.
+                return null;
+            }
+            // GENERATE and above: create the cube, then fill it from the generator when one is set. With no
+            // generator it stays an empty in-memory cube, preserving the vanilla-off default.
+            ICube generated = column.getCube(cubeY);
+            if (generator != null && generated instanceof Cube fresh && fresh.isEmpty()) {
+                generateInto(fresh);
+            }
+            cube = generated;
+        }
+        // POPULATE (and above, since LIGHT implies populate): decorate through the neighbour-gated
+        // populator, which first generates the required neighbourhood so cross-cube features are seamless,
+        // then decorates this cube once. This applies whether the cube was cached, loaded, or just
+        // generated (an already-generated cube still needs populating on a POPULATE request), and is
+        // skipped once the cube is populated. LIGHT-stage lighting itself is not ported.
+        if (populator != null && req.ordinal() >= Requirement.POPULATE.ordinal()
+                && cube instanceof Cube target && !target.isPopulated()) {
+            populator.ensurePopulated(new CubePos(cubeX, cubeY, cubeZ));
+        }
+        return cube;
+    }
 
-        ICube fromDisk = loadCubeFromStorage(column, cubeX, cubeY, cubeZ);
-        if (fromDisk != null) {
-            return fromDisk;
+    /**
+     * Fills a freshly created, empty cube from the generator: runs the generator into a {@link CubePrimer}
+     * and copies its non-air block states into the cube. Air positions are left untouched (the cube is
+     * already all air). Called only when {@link #generator} is set.
+     */
+    private void generateInto(Cube cube) {
+        CubePrimer primer = new CubePrimer();
+        generator.generate(cube.getCoords(), primer);
+        for (int y = 0; y < ICube.SIZE; y++) {
+            for (int z = 0; z < ICube.SIZE; z++) {
+                for (int x = 0; x < ICube.SIZE; x++) {
+                    BlockState state = primer.getBlockState(x, y, z);
+                    if (!state.isAir()) {
+                        cube.setBlockState(x, y, z, state);
+                    }
+                }
+            }
         }
-
-        if (req == Requirement.LOAD) {
-            // LOAD must not generate: the cube is neither cached nor on disk.
-            return null;
+        // Biomes, when the generator places them: adopted before any section is built so it wraps them.
+        var biomes = generator.generateBiomes(cube.getCoords());
+        if (biomes != null) {
+            cube.setBiomes(biomes);
         }
-        // GENERATE and above: empty cube on demand (generator deferred).
-        return column.getCube(cubeY);
     }
 
     /**

@@ -34,8 +34,12 @@ import io.github.opencubicchunks.cubicchunks.api.worldgen.ICubeGenerator;
 import io.github.opencubicchunks.cubicchunks.api.world.ICubicTicket;
 import io.github.opencubicchunks.cubicchunks.server.CubeProviderServer;
 import io.github.opencubicchunks.cubicchunks.server.CubicTicketManager;
+import io.github.opencubicchunks.cubicchunks.worldgen.FlatCubeGenerator;
+import io.github.opencubicchunks.cubicchunks.worldgen.NoiseCubeGenerator;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.chunk.ChunkGenerator;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 
@@ -61,11 +65,14 @@ public abstract class ServerLevelMixin implements ICubicWorldServer {
 
     @Unique private CubeProviderServer cubicchunks$cubeProvider;
     @Unique private CubicTicketManager cubicchunks$ticketManager;
+    @Unique private ICubeGenerator cubicchunks$generator;
 
     @Override
     public ICubeProviderServer getCubeCache() {
         if (cubicchunks$cubeProvider == null) {
             cubicchunks$cubeProvider = new CubeProviderServer();
+            // Base-terrain generation for GENERATE-level cube requests (ticket forcing, etc.).
+            cubicchunks$cubeProvider.setGenerator(getCubeGenerator());
         }
         return cubicchunks$cubeProvider;
     }
@@ -152,7 +159,22 @@ public abstract class ServerLevelMixin implements ICubicWorldServer {
 
     @Override
     public ICubeGenerator getCubeGenerator() {
-        throw new UnsupportedOperationException("Cube generator not ported yet (generation pipeline deferred)");
+        if (cubicchunks$generator == null) {
+            ServerLevel self = (ServerLevel) (Object) this;
+            ServerChunkCache chunkSource = self.getChunkSource();
+            ChunkGenerator vanillaGenerator = chunkSource == null ? null : chunkSource.getGenerator();
+            if (vanillaGenerator != null) {
+                // Carry the world's real vanilla terrain into cubes. The purity contract on
+                // ICubeGenerator (pure noise sample of captured generator + RandomState, no live-world
+                // reads) is what keeps this safe under C2ME's off-main-thread worldgen.
+                cubicchunks$generator = new NoiseCubeGenerator(
+                        vanillaGenerator, chunkSource.randomState(), self, self.registryAccess(), self.getSeed());
+            } else {
+                // Fallback for a world with no chunk generator available yet: a flat base-terrain profile.
+                cubicchunks$generator = new FlatCubeGenerator(self.getSeed());
+            }
+        }
+        return cubicchunks$generator;
     }
 
     @Override

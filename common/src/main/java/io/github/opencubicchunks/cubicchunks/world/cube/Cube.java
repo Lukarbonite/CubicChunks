@@ -29,10 +29,12 @@ import io.github.opencubicchunks.cubicchunks.api.util.Coords;
 import io.github.opencubicchunks.cubicchunks.api.util.CubePos;
 import io.github.opencubicchunks.cubicchunks.api.world.ICube;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -40,6 +42,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.PalettedContainer;
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
+import net.minecraft.world.level.chunk.PalettedContainerRO;
 import net.minecraft.world.level.chunk.Strategy;
 
 import java.util.Collection;
@@ -65,6 +68,12 @@ public class Cube implements ICube {
     /** NBT key under which the block-state container is stored. */
     private static final String NBT_BLOCK_STATES = "block_states";
 
+    /** NBT key under which the biome container is stored (only when a serialization factory is given). */
+    private static final String NBT_BIOMES = "biomes";
+
+    /** NBT key for the populate-stage flag (whether generator decoration has run for this cube). */
+    private static final String NBT_POPULATED = "populated";
+
     /** Palette strategy shared by the block-state container and its codec. */
     private static final Strategy<BlockState> BLOCK_STRATEGY =
             Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY);
@@ -76,6 +85,16 @@ public class Cube implements ICube {
     private final CubePos coords;
     private PalettedContainer<BlockState> blocks;
     private int nonAirBlockCount;
+
+    /**
+     * Generated biomes for this cube (4x4x4 cells), or {@code null} if none were produced (then the
+     * section wraps an empty biome container). Filled by the generator, which owns the registry needed
+     * to build it; the cube itself is world-free and cannot create one. Not yet serialized.
+     */
+    @Nullable private PalettedContainerRO<Holder<Biome>> biomes;
+
+    /** Whether the generator's populate (decoration) stage has run for this cube. Serialized. */
+    private boolean populated;
 
     /**
      * The vanilla section wrapping {@link #blocks}, created lazily once a {@link PalettedContainerFactory}
@@ -188,10 +207,33 @@ public class Cube implements ICube {
      */
     public LevelChunkSection getOrCreateSection(PalettedContainerFactory factory) {
         if (section == null) {
-            section = new LevelChunkSection(blocks, factory.createForBiomes());
+            // Wrap the generated biomes if we have them, otherwise an empty (default-biome) container.
+            section = new LevelChunkSection(blocks, biomes != null ? biomes : factory.createForBiomes());
             section.recalcBlockCounts();
         }
         return section;
+    }
+
+    /**
+     * Adopts a prebuilt biome container (4x4x4 cells) for this cube, as produced by the generator. Must
+     * be called before {@link #getOrCreateSection} for the biomes to reach the section; dropping any
+     * existing section so the next {@code getOrCreateSection} wraps the new biomes.
+     *
+     * @param container the biome container to adopt
+     */
+    public void setBiomes(PalettedContainerRO<Holder<Biome>> container) {
+        this.biomes = container;
+        this.section = null;
+    }
+
+    /** Whether the generator's populate (decoration) stage has run for this cube. */
+    public boolean isPopulated() {
+        return populated;
+    }
+
+    /** Marks whether the generator's populate (decoration) stage has run for this cube. */
+    public void setPopulated(boolean populated) {
+        this.populated = populated;
     }
 
     /** The cube's {@link LevelChunkSection} if it has been created, otherwise {@code null}. */
@@ -270,7 +312,26 @@ public class Cube implements ICube {
      * @return {@code tag}, for chaining
      */
     public CompoundTag writeToNbt(CompoundTag tag) {
+        return writeToNbt(tag, null);
+    }
+
+    /**
+     * Writes this cube's block storage into {@code tag}, and, when a {@code factory} is supplied and this
+     * cube has generated/mirrored biomes, the biome container too (biomes need the world's biome registry
+     * to serialize, which the {@code factory} carries; the world-free block path does not). Reads back
+     * via {@link #readFromNbt(CompoundTag, PalettedContainerFactory)} given the same factory.
+     *
+     * @param tag the compound to write into
+     * @param factory the palette-container factory (from a world's {@code RegistryAccess}) for biome
+     *                serialization, or {@code null} to write block states only
+     * @return {@code tag}, for chaining
+     */
+    public CompoundTag writeToNbt(CompoundTag tag, @Nullable PalettedContainerFactory factory) {
         tag.put(NBT_BLOCK_STATES, BLOCKS_CODEC.encodeStart(NbtOps.INSTANCE, blocks).getOrThrow());
+        if (factory != null && biomes != null) {
+            tag.put(NBT_BIOMES, factory.biomeContainerCodec().encodeStart(NbtOps.INSTANCE, biomes).getOrThrow());
+        }
+        tag.putBoolean(NBT_POPULATED, populated);
         return tag;
     }
 
@@ -282,6 +343,19 @@ public class Cube implements ICube {
      * @param tag the compound to read from
      */
     public void readFromNbt(CompoundTag tag) {
+        readFromNbt(tag, null);
+    }
+
+    /**
+     * Restores this cube's block storage from {@code tag} (as {@link #readFromNbt(CompoundTag)}), and,
+     * when a {@code factory} is supplied and {@code tag} holds a biome entry, the biome container too
+     * (written by {@link #writeToNbt(CompoundTag, PalettedContainerFactory)}). With no factory or no
+     * stored biomes, the cube's biomes are left unset (its section then falls back to the default biome).
+     *
+     * @param tag the compound to read from
+     * @param factory the factory for biome deserialization, or {@code null} to read block states only
+     */
+    public void readFromNbt(CompoundTag tag, @Nullable PalettedContainerFactory factory) {
         // Replacing the block container invalidates any section wrapping the old one; drop it so the
         // next getOrCreateSection wraps the freshly decoded container.
         this.section = null;
@@ -289,10 +363,17 @@ public class Cube implements ICube {
         if (blockStatesTag == null) {
             this.blocks = new PalettedContainer<>(AIR, BLOCK_STRATEGY);
             this.nonAirBlockCount = 0;
-            return;
+        } else {
+            this.blocks = BLOCKS_CODEC.parse(NbtOps.INSTANCE, blockStatesTag).getOrThrow();
+            recountNonAirBlocks();
         }
-        this.blocks = BLOCKS_CODEC.parse(NbtOps.INSTANCE, blockStatesTag).getOrThrow();
-        recountNonAirBlocks();
+        if (factory != null) {
+            Tag biomesTag = tag.get(NBT_BIOMES);
+            if (biomesTag != null) {
+                this.biomes = factory.biomeContainerCodec().parse(NbtOps.INSTANCE, biomesTag).getOrThrow();
+            }
+        }
+        this.populated = tag.getBooleanOr(NBT_POPULATED, false);
     }
 
     /** Recomputes {@link #nonAirBlockCount} by scanning the container (used after deserialization). */
