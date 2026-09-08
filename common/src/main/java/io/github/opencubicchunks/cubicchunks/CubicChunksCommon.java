@@ -41,6 +41,7 @@ import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.Fluids;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -950,6 +951,132 @@ public final class CubicChunksCommon {
         } finally {
             deleteRecursively(dir);
         }
+    }
+
+    /**
+     * Smoke-checks block-entity bookkeeping on the cube-routed write path: with a chunk in cubic mode,
+     * placing a block-entity block (a chest) through {@code LevelChunk.setBlockState} registers a block
+     * entity, replacing it with a plain block removes it (no stale entity is left behind, which is what
+     * used to trip vanilla's validation on reload), and placing a chest again re-registers one. Reverts
+     * cubic mode and clears the position in a {@code finally}.
+     */
+    public static void verifyBlockEntityBridging(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        LevelChunk chunk = overworld.getChunk(0, 0);
+        if (!(chunk instanceof ICubicLevelChunk cubicChunk)) {
+            LOGGER.warn("Block-entity bridging check SKIPPED: LevelChunk is not ICubicLevelChunk");
+            return;
+        }
+
+        BlockState chest = Blocks.CHEST.defaultBlockState();
+        BlockState stone = Blocks.STONE.defaultBlockState();
+        BlockState air = Blocks.AIR.defaultBlockState();
+        BlockPos pos = new BlockPos(chunk.getPos().getMinBlockX() + 1, 64, chunk.getPos().getMinBlockZ() + 1);
+
+        Column column = new Column(chunk.getPos().x(), chunk.getPos().z());
+        boolean beAfterPlace = false;
+        boolean beRemovedAfterReplace = false;
+        boolean beAfterRePlace = false;
+        try {
+            cubicChunk.cubicchunks$setCubic(column);
+
+            chunk.setBlockState(pos, chest, 0);
+            beAfterPlace = chunk.getBlockEntity(pos) != null;
+
+            chunk.setBlockState(pos, stone, 0);
+            beRemovedAfterReplace = chunk.getBlockEntity(pos) == null;
+
+            chunk.setBlockState(pos, chest, 0);
+            beAfterRePlace = chunk.getBlockEntity(pos) != null;
+        } finally {
+            chunk.setBlockState(pos, air, 0);
+            cubicChunk.cubicchunks$clearCubic();
+        }
+
+        LOGGER.info("Block-entity bridging check: beAfterPlace={}, beRemovedAfterReplace={}, beAfterRePlace={}",
+                beAfterPlace, beRemovedAfterReplace, beAfterRePlace);
+    }
+
+    /**
+     * Smoke-checks heightmap parity on the cube-routed write path: placing a surface block high above
+     * the terrain (through {@code LevelChunk.setBlockState} while cubic) raises the {@code WORLD_SURFACE}
+     * heightmap to just above it, and clearing it back to air lowers the heightmap again. Confirms the
+     * per-write heightmap update runs. Reverts the block and cubic mode in a {@code finally}.
+     */
+    public static void verifyHeightmapUpdate(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        LevelChunk chunk = overworld.getChunk(0, 0);
+        if (!(chunk instanceof ICubicLevelChunk cubicChunk)) {
+            LOGGER.warn("Heightmap update check SKIPPED: LevelChunk is not ICubicLevelChunk");
+            return;
+        }
+
+        BlockState stone = Blocks.STONE.defaultBlockState();
+        BlockState air = Blocks.AIR.defaultBlockState();
+        int y = 200; // well above vanilla terrain, within the extended window
+        int localX = 3;
+        int localZ = 3;
+        BlockPos pos = new BlockPos(chunk.getPos().getMinBlockX() + localX, y, chunk.getPos().getMinBlockZ() + localZ);
+
+        Column column = new Column(chunk.getPos().x(), chunk.getPos().z());
+        boolean raisedToBlock = false;
+        boolean loweredAfterClear = false;
+        try {
+            cubicChunk.cubicchunks$setCubic(column);
+
+            int before = chunk.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, localX, localZ);
+
+            chunk.setBlockState(pos, stone, 0);
+            int afterPlace = chunk.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, localX, localZ);
+            raisedToBlock = before < y && afterPlace >= y;
+
+            chunk.setBlockState(pos, air, 0);
+            int afterClear = chunk.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, localX, localZ);
+            loweredAfterClear = afterClear < y;
+        } finally {
+            chunk.setBlockState(pos, air, 0);
+            cubicChunk.cubicchunks$clearCubic();
+        }
+
+        LOGGER.info("Heightmap update check: raisedToBlock={}, loweredAfterClear={}",
+                raisedToBlock, loweredAfterClear);
+    }
+
+    /**
+     * Smoke-checks reactive updates on the cube-routed write path: placing a water source through
+     * {@code LevelChunk.setBlockState} while a chunk is cubic schedules a fluid tick (the new block's
+     * {@code onPlace} ran), which is what makes water flow in cubic mode. Verifies no fluid tick is
+     * scheduled beforehand, and that one is scheduled after. Reverts the block and cubic mode in a
+     * {@code finally}.
+     */
+    public static void verifyReactiveUpdates(MinecraftServer server) {
+        ServerLevel overworld = server.overworld();
+        LevelChunk chunk = overworld.getChunk(0, 0);
+        if (!(chunk instanceof ICubicLevelChunk cubicChunk)) {
+            LOGGER.warn("Reactive updates check SKIPPED: LevelChunk is not ICubicLevelChunk");
+            return;
+        }
+
+        BlockState water = Blocks.WATER.defaultBlockState();
+        BlockState air = Blocks.AIR.defaultBlockState();
+        BlockPos pos = new BlockPos(chunk.getPos().getMinBlockX() + 2, 66, chunk.getPos().getMinBlockZ() + 2);
+
+        Column column = new Column(chunk.getPos().x(), chunk.getPos().z());
+        boolean noTickBefore = false;
+        boolean tickScheduledAfter = false;
+        try {
+            cubicChunk.cubicchunks$setCubic(column);
+
+            noTickBefore = !overworld.getFluidTicks().hasScheduledTick(pos, Fluids.WATER);
+            chunk.setBlockState(pos, water, 0);
+            tickScheduledAfter = overworld.getFluidTicks().hasScheduledTick(pos, Fluids.WATER);
+        } finally {
+            chunk.setBlockState(pos, air, 0);
+            cubicChunk.cubicchunks$clearCubic();
+        }
+
+        LOGGER.info("Reactive updates check: noTickBefore={}, fluidTickScheduledAfter={}",
+                noTickBefore, tickScheduledAfter);
     }
 
     /**
